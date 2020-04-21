@@ -14,7 +14,7 @@ using namespace TeensyTimerTool;
     D2 - 6.02 - 1 - LSB
 */
 
-#define clk 10 // PWM Clock Pin - Timer 1, Channel 0
+#define clk 10 // PWM Clock Pin - First timer, first channel
 
 uint8_t data = 0;
 unsigned long count = 0;
@@ -22,14 +22,58 @@ unsigned long count = 0;
 elapsedMicros microseconds;
 elapsedMillis milliseconds;
 
-Timer t1(TMR1);
-
 int row = 0;
 const int height = 24;
 int col = 0;
 const int width = 32;
 uint8_t image[height][width];
 bool done = false;
+
+Timer t1(TMR1);
+IRQ_NUMBER_t irq = IRQ_QTIMER1;
+IMXRT_TMR_t* tmr = &IMXRT_TMR1;
+IMXRT_TMR_CH_t* ch0 = &tmr->CH[0];
+
+void isr();
+
+void timerSetup() {
+    ch0->CTRL = 0x0000;
+    attachInterruptVector(irq, isr);
+
+    int period = 100; // Period in us
+    int psc = 2; // Prescaler 2^n
+    float pscValue = 1 << (psc & 0b0111);
+    uint32_t pscBits = 0b1000 | (psc & 0b0111);
+
+    float t = period * (150.0f / pscValue); // Number of clock cycles per period
+    uint16_t reload;
+    if(t > 0xFFFF) reload = 0xFFFE;
+    else reload = (uint16_t)t - 1;
+
+    ch0->CTRL = 0x0000;
+    ch0->LOAD = 0x0000;
+    ch0->COMP1 = reload;
+    ch0->CMPLD1 = reload;
+    ch0->CNTR = 0x0000;
+    ch0->CSCTRL &= ~TMR_CSCTRL_TCF1;
+    ch0->CSCTRL |= TMR_CSCTRL_TCF1EN;
+
+    ch0->CTRL = TMR_CTRL_CM(1) | TMR_CTRL_PCS(pscBits) | 
+        TMR_CTRL_LENGTH;// | TMR_CTRL_OUTMODE(6);
+
+    // ch0->SCTRL |= TMR_SCTRL_IPS; // Invert polarity to count falling edge
+
+    // // t1.beginPeriodic(isr, 1'000'000); // Set up interrupt function, 1s period
+    // attachInterruptVector(irq, isr);
+    // NVIC_ENABLE_IRQ(irq);
+
+    // // analogWriteFrequency(clk, 6'000'000); // Set interrupt and PWM frequency
+    // analogWriteFrequency(clk, 6'000); // Set interrupt and PWM frequency
+    // analogWrite(clk, 0); // Turn off PWM
+    // interrupts();
+
+    NVIC_ENABLE_IRQ(irq);
+}
 
 // void writeReg(uint8_t addr, uint8_t val) {}
 
@@ -50,19 +94,20 @@ void isr() {
         if(row == height) {
             row = 0;
             done = true;
-            analogWrite(clk, 0);
         }
     }
     count++;
+
+    ch0->CSCTRL &= ~TMR_CSCTRL_TCF1;
 }
 
 void captureImage() {
-    analogWrite(clk, 128);
-    while(!done) {
-        delayMicroseconds(500);
+    // analogWrite(clk, 128);
+    while(done == false) {
+        delayMicroseconds(1000);
         Serial.println(done);
     }
-    analogWrite(clk, 0);
+    // analogWrite(clk, 0);
     done = false;
 }
 
@@ -75,7 +120,7 @@ void setup() {
     Serial.begin(115200);
     while(!Serial);
     Serial.println("Serial initialized.");
-    t1.beginPeriodic(isr, 1'000'000); // Set up interrupt function
+    timerSetup();
     pinMode(14, INPUT_PULLUP);
     pinMode(15, INPUT_PULLUP);
     pinMode(16, INPUT_PULLUP);
@@ -85,9 +130,6 @@ void setup() {
     pinMode(20, INPUT_PULLUP);
     pinMode(21, INPUT_PULLUP);
 
-    // analogWriteFrequency(clk, 6'000'000); // Set interrupt and PWM frequency
-    analogWriteFrequency(clk, 6'000); // Set interrupt and PWM frequency
-    analogWrite(clk, 0); // Turn off PWM
     Serial.println("Setup done");
     digitalWrite(LED_BUILTIN, LOW);
 }
